@@ -1,28 +1,49 @@
 # Minhash LSH in Golang
 
-[![Build Status](https://travis-ci.org/ekzhu/minhash-lsh.svg?branch=master)](https://travis-ci.org/ekzhu/minhash-lsh)
-[![GoDoc](https://godoc.org/github.com/ekzhu/minhash-lsh?status.svg)](https://godoc.org/github.com/ekzhu/minhash-lsh)
+[![GoDoc](https://godoc.org/github.com/stillmatic/minhash-lsh?status.svg)](https://godoc.org/github.com/stillmatic/minhash-lsh)
 
-[Documentation](https://godoc.org/github.com/ekzhu/minhash-lsh)
+This is a fork of [ekzhu/minhash-lsh](github.com/ekzhu/minhash-lsh) modified to support generics.
 
-Install: `go get github.com/ekzhu/minhash-lsh`
+Install: `go get github.com/stillmatic/minhash-lsh`
 
-## Run Benchmark
+Example of using this to deduplicate some text:
 
-### Set file format
+```go
+type newsItem struct {
+   URL string
+   Description string
+}
 
-1. One set per line
-2. Each set, all items are separated by whitespaces
-3. If the parameter firstItemIsID is set to true,
-   the first itme is the unique ID of the set.
-4. The rest of the items with the following format: `<value>____<frequency>`
+var newsItems []newsItem
 
-   * value is an unique element of the set
-   * frequency is an integer count of the occurance of value
-   * `____` (4 underscores) is the separator
+// key on the URL, so instantiate with `string` generic
+lsh := minhashlsh.NewMinhashLSH[string](88, 0.7, newsItems)
+for _, item := range newItems {
+   mh := minhashlsh.NewMinhashWithDefaults()
+   mh.Push([]byte(item.Description))
+   lsh.Add(item.URL, mh.Signature())
+}
+// build index
+lsh.Index()
 
-### All Pair Benchmark
+// find duplicate entries 
+dupeKeys := make(map[string]struct{})
+for _, item := range newsItems {
+   if _, ok := dupeKeys[item.URL]; ok {
+      //already a duplicate
+      continue
+   }
+   mh := minhashlsh.NewMinhashWithDefaults()
+   mh.Push([]byte(item.Description))
+   queryRes := lsh.Query(mh.Signature())
+   if len(queryRes) == 0 {
+      continue
+   }
 
-```
-minhash-lsh-all-pair -input <set file name>
+   for _, res := range queryRes {
+      if res != item.URL {
+         dupeKeys[res] = struct{}{}
+      }
+   }
+}
 ```

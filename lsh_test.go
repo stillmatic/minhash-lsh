@@ -33,7 +33,7 @@ func Test_HashKeyFunc64(t *testing.T) {
 }
 
 func Test_MinhashLSH(t *testing.T) {
-	f := NewMinhashLSH16(256, 0.6, 3)
+	f := NewMinhashLSH16[string](256, 0.6, 3)
 	// sig1 is different from sig2 and sig3
 	// sig2 and sig3 are identical
 	sig1 := randomSignature(256, 1)
@@ -59,7 +59,7 @@ func Test_MinhashLSH(t *testing.T) {
 
 	found := 0
 	for _, key := range f.Query(sig3) {
-		if key.(string) == "sig3" || key.(string) == "sig2" {
+		if key == "sig3" || key == "sig2" {
 			found++
 		}
 	}
@@ -69,7 +69,7 @@ func Test_MinhashLSH(t *testing.T) {
 }
 
 func Test_MinhashLSH2(t *testing.T) {
-	minhashLsh := NewMinhashLSH16(256, 0.5, 1)
+	minhashLsh := NewMinhashLSH16[string](256, 0.5, 1)
 	seed := int64(1)
 	numHash := 256
 	mh := NewMinhash(seed, numHash)

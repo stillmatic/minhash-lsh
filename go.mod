@@ -1,4 +1,4 @@
-module github.com/ekzhu/minhash-lsh
+module github.com/stillmatic/minhash-lsh
 
 go 1.22.0
 

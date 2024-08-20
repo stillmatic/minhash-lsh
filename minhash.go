@@ -46,6 +46,12 @@ func NewMinhash(seed int64, numHash int) *Minhash {
 	}
 }
 
+// NewMinhashWithDefaults initializes a MinHash object with default seed and number of hashes.
+// Matches Python implementation: https://github.com/ekzhu/datasketch/blob/5512549871d29c55b3cd8e99a79fcbd14859b77d/datasketch/minhash.py#L69C9-L69C17
+func NewMinhashWithDefaults() *Minhash {
+	return NewMinhash(1, 128)
+}
+
 // Push a new value to the MinHash object.
 // The value should be serialized to byte slice.
 func (m *Minhash) Push(b []byte) {
