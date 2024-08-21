@@ -98,3 +98,73 @@ func Test_MinhashLSH2(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func Test_MinhashLSHHeap(t *testing.T) {
+	f := NewMinhashLSHHeap[string](256, 0.6)
+	// sig1 is different from sig2 and sig3
+	// sig2 and sig3 are identical
+	sig1 := randomSignature(256, 1)
+	sig2 := randomSignature(256, 2)
+	sig3 := randomSignature(256, 2)
+
+	f.Add("sig1", sig1)
+	f.Add("sig2", sig2)
+	f.Add("sig3", sig3)
+
+	// no need to call index
+	if len(f.Query(sig3)) != 2 {
+		t.Fatal("keys should be searchable before calling Index()")
+	}
+
+	for i := range f.hashTables {
+		// Hash tables should have size 3
+		if len(*f.hashTables[i]) != 3 {
+			t.Fatal(f.hashTables[i])
+		}
+	}
+
+	found := 0
+	for _, key := range f.Query(sig3) {
+		if key == "sig3" || key == "sig2" {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatal("unable to retrieve inserted keys")
+	}
+}
+
+func Test_MinhashLSHHeapWithSize(t *testing.T) {
+	f := NewMinhashLSHHeapWithSize[string](256, 0.6, 3)
+	// sig1 is different from sig2 and sig3
+	// sig2 and sig3 are identical
+	sig1 := randomSignature(256, 1)
+	sig2 := randomSignature(256, 2)
+	sig3 := randomSignature(256, 2)
+
+	f.Add("sig1", sig1)
+	f.Add("sig2", sig2)
+	f.Add("sig3", sig3)
+
+	// no need to call index
+	if len(f.Query(sig3)) != 2 {
+		t.Fatal("keys should be searchable before calling Index()")
+	}
+
+	for i := range f.hashTables {
+		// Hash tables should have size 3
+		if len(*f.hashTables[i]) != 3 {
+			t.Fatal(f.hashTables[i])
+		}
+	}
+
+	found := 0
+	for _, key := range f.Query(sig3) {
+		if key == "sig3" || key == "sig2" {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Fatal("unable to retrieve inserted keys")
+	}
+}

@@ -16,11 +16,40 @@ func Benchmark_InsertN(b *testing.B) {
 				sigs[i] = randomSignature(64, int64(i))
 			}
 			b.ResetTimer()
-			f := NewMinhashLSH16[string](64, 0.5, nSig)
-			for i := range sigs {
-				f.Add(strconv.Itoa(i), sigs[i])
+			for j := 0; j < b.N; j++ {
+				f := NewMinhashLSH16[string](64, 0.5, nSig)
+				for i := range sigs {
+					f.Add(strconv.Itoa(i), sigs[i])
+				}
+				f.Index()
 			}
-			f.Index()
+		})
+
+		b.Run(fmt.Sprintf("heap-insert-%d", nSig), func(b *testing.B) {
+			sigs := make([][]uint64, nSig)
+			for i := range sigs {
+				sigs[i] = randomSignature(64, int64(i))
+			}
+			b.ResetTimer()
+			for j := 0; j < b.N; j++ {
+				f := NewMinhashLSHHeap[string](64, 0.5)
+				for i := range sigs {
+					f.Add(strconv.Itoa(i), sigs[i])
+				}
+			}
+		})
+		b.Run(fmt.Sprintf("fixed-size-heap-insert-%d", nSig), func(b *testing.B) {
+			sigs := make([][]uint64, nSig)
+			for i := range sigs {
+				sigs[i] = randomSignature(64, int64(i))
+			}
+			b.ResetTimer()
+			for j := 0; j < b.N; j++ {
+				f := NewMinhashLSHHeapWithSize[string](64, 0.5, nSig)
+				for i := range sigs {
+					f.Add(strconv.Itoa(i), sigs[i])
+				}
+			}
 		})
 	}
 }
