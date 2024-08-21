@@ -1,16 +1,3 @@
-# Minhash LSH in Golang
-
-[![GoDoc](https://godoc.org/github.com/stillmatic/minhash-lsh?status.svg)](https://godoc.org/github.com/stillmatic/minhash-lsh)
-
-This is a fork of [ekzhu/minhash-lsh](github.com/ekzhu/minhash-lsh) modified to support generics and with a new heap backend. Additionally, I've added defaults from the Python package.
-
-Install: `go get github.com/stillmatic/minhash-lsh`
-
-The heap backend is up to 7x faster (inserts) than the original implementation. I've additionally added memory pooling which reduces memory usage by 25% and reduces allocations by 50%.
-
-Example of using this to deduplicate some text:
-
-```go
 package minhashlsh_test
 
 import (
@@ -63,5 +50,3 @@ func ExampleMinhashLSHHeap() {
 	// should be 1 duplicate to remove
 	fmt.Println(dupeKeys)
 }
-
-```

@@ -7,14 +7,14 @@ import (
 )
 
 type nodeSimilarity[T comparable] struct {
-	Key        T
-	Similarity string
+	Key   T
+	Value string
 }
 
 type similarityHeap[T comparable] []nodeSimilarity[T]
 
 func (h similarityHeap[T]) Len() int           { return len(h) }
-func (h similarityHeap[T]) Less(i, j int) bool { return h[i].Similarity > h[j].Similarity }
+func (h similarityHeap[T]) Less(i, j int) bool { return h[i].Value > h[j].Value }
 func (h similarityHeap[T]) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
 func (h *similarityHeap[T]) Push(x any) {
@@ -103,7 +103,7 @@ func NewMinhashLSHHeapWithSize[T comparable](numHash int, threshold float64, ini
 func (f *MinhashLSHHeap[T]) Add(key T, sig []uint64) {
 	hashKeys := f.hashKeys(sig)
 	for i, hashKey := range hashKeys {
-		f.hashTables[i].Push(nodeSimilarity[T]{Key: key, Similarity: hashKey})
+		f.hashTables[i].Push(nodeSimilarity[T]{Key: key, Value: hashKey})
 	}
 }
 
@@ -125,10 +125,10 @@ func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]bool {
 		hashTable := *f.hashTables[i]
 		hashKey := hashKeys[i]
 		k := sort.Search(len(hashTable), func(x int) bool {
-			return hashTable[x].Similarity >= hashKey
+			return hashTable[x].Value >= hashKey
 		})
-		if k < len(hashTable) && hashTable[k].Similarity == hashKey {
-			for j := k; j < len(hashTable) && hashTable[j].Similarity == hashKey; j++ {
+		if k < len(hashTable) && hashTable[k].Value == hashKey {
+			for j := k; j < len(hashTable) && hashTable[j].Value == hashKey; j++ {
 				key := hashTable[j].Key
 				if _, exist := results[key]; !exist {
 					results[key] = true
