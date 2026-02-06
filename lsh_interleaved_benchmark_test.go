@@ -10,8 +10,8 @@ import (
 // repeat. This is the primary use case for a streaming/online variant.
 //
 // Two approaches compared:
-//   - map:     MinhashLSHMap  (map-backed, O(1) insert + O(1) lookup)
-//   - reindex: MinhashLSH      (sorted slices, explicit Index() after every add)
+//   - map:     MinhashLSHMap  (hash map, O(1) insert + O(1) lookup)
+//   - reindex: MinhashLSH     (sorted slices, explicit Index() after every add)
 func Benchmark_Interleaved(b *testing.B) {
 	const poolSize = 200_000
 	sigs := make([][]uint64, poolSize)
@@ -22,7 +22,7 @@ func Benchmark_Interleaved(b *testing.B) {
 	baseSizes := []int{1_000, 10_000, 100_000}
 
 	for _, baseSize := range baseSizes {
-		addPool := poolSize - baseSize // signatures available for interleaved adds
+		addPool := poolSize - baseSize
 
 		b.Run(fmt.Sprintf("map/%d", baseSize), func(b *testing.B) {
 			f := NewMinhashLSHMapWithSize[string](64, 0.5, baseSize)
