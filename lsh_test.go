@@ -14,24 +14,6 @@ func randomSignature(size int, seed int64) []uint64 {
 	return sig
 }
 
-func Test_HashKeyFunc16(t *testing.T) {
-	sig := randomSignature(2, 1)
-	f := hashKeyFuncGen(2)
-	hashKey := f(sig)
-	if len(hashKey) != 2*2 {
-		t.Fatal(len(hashKey))
-	}
-}
-
-func Test_HashKeyFunc64(t *testing.T) {
-	sig := randomSignature(2, 1)
-	f := hashKeyFuncGen(8)
-	hashKey := f(sig)
-	if len(hashKey) != 8*2 {
-		t.Fatal(len(hashKey))
-	}
-}
-
 func Test_MinhashLSH(t *testing.T) {
 	f := NewMinhashLSH16[string](256, 0.6, 3)
 	// sig1 is different from sig2 and sig3
@@ -51,7 +33,6 @@ func Test_MinhashLSH(t *testing.T) {
 
 	f.Index()
 	for i := range f.hashTables {
-		// Hash tables should have size 3
 		if len(f.hashTables[i]) != 3 {
 			t.Fatal(f.hashTables[i])
 		}
@@ -66,6 +47,8 @@ func Test_MinhashLSH(t *testing.T) {
 	if found != 2 {
 		t.Fatal("unable to retrieve inserted keys")
 	}
+
+	_ = sig1 // sig1 used in Add above
 }
 
 func Test_MinhashLSH2(t *testing.T) {
@@ -117,8 +100,7 @@ func Test_MinhashLSHHeap(t *testing.T) {
 	}
 
 	for i := range f.hashTables {
-		// Hash tables should have size 3
-		if len(*f.hashTables[i]) != 3 {
+		if len(f.hashTables[i]) != 3 {
 			t.Fatal(f.hashTables[i])
 		}
 	}
@@ -132,6 +114,8 @@ func Test_MinhashLSHHeap(t *testing.T) {
 	if found != 2 {
 		t.Fatal("unable to retrieve inserted keys")
 	}
+
+	_ = sig1 // sig1 used in Add above
 }
 
 func Test_MinhashLSHHeapWithSize(t *testing.T) {
@@ -152,8 +136,7 @@ func Test_MinhashLSHHeapWithSize(t *testing.T) {
 	}
 
 	for i := range f.hashTables {
-		// Hash tables should have size 3
-		if len(*f.hashTables[i]) != 3 {
+		if len(f.hashTables[i]) != 3 {
 			t.Fatal(f.hashTables[i])
 		}
 	}
@@ -167,4 +150,6 @@ func Test_MinhashLSHHeapWithSize(t *testing.T) {
 	if found != 2 {
 		t.Fatal("unable to retrieve inserted keys")
 	}
+
+	_ = sig1 // sig1 used in Add above
 }

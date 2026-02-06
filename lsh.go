@@ -2,28 +2,15 @@
 package minhashlsh
 
 import (
+	"cmp"
 	"encoding/binary"
 	"math"
-	"sort"
+	"slices"
 )
 
 const (
 	integrationPrecision = 0.01
 )
-
-type hashKeyFunc func([]uint64) string
-
-func hashKeyFuncGen(hashValueSize int) hashKeyFunc {
-	return func(sig []uint64) string {
-		s := make([]byte, hashValueSize*len(sig))
-		buf := make([]byte, 8)
-		for i, v := range sig {
-			binary.LittleEndian.PutUint64(buf, v)
-			copy(s[i*hashValueSize:(i+1)*hashValueSize], buf[:hashValueSize])
-		}
-		return string(s)
-	}
-}
 
 // Compute the integral of function f, lower limit a, upper limit l, and
 // precision defined as the quantize step
@@ -94,10 +81,6 @@ type entry[T any] struct {
 // Look-up operation is implemented using binary search.
 type hashTable[T any] []entry[T]
 
-func (h hashTable[T]) Len() int           { return len(h) }
-func (h hashTable[T]) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-func (h hashTable[T]) Less(i, j int) bool { return h[i].hashKey < h[j].hashKey }
-
 // MinhashLSH represents a MinHash LSH implemented using LSH Forest
 // (http://ilpubs.stanford.edu:8090/678/1/2005-14.pdf).
 // It supports query-time setting of the MinHash LSH parameters
@@ -107,9 +90,10 @@ type MinhashLSH[T comparable] struct {
 	k              int
 	l              int
 	hashTables     []hashTable[T]
-	hashKeyFunc    hashKeyFunc
 	hashValueSize  int
 	numIndexedKeys int
+	keyBuf  []byte // reusable buffer for batch hash key computation
+	keySize int    // hashValueSize * k (bytes per band key)
 }
 
 func newMinhashLSH[T comparable](threshold float64, numHash, hashValueSize, initSize int) *MinhashLSH[T] {
@@ -118,13 +102,15 @@ func newMinhashLSH[T comparable](threshold float64, numHash, hashValueSize, init
 	for i := range hashTables {
 		hashTables[i] = make(hashTable[T], 0, initSize)
 	}
+	keySize := hashValueSize * k
 	return &MinhashLSH[T]{
 		k:              k,
 		l:              l,
 		hashValueSize:  hashValueSize,
 		hashTables:     hashTables,
-		hashKeyFunc:    hashKeyFuncGen(hashValueSize),
 		numIndexedKeys: 0,
+		keyBuf:         make([]byte, l*keySize),
+		keySize:        keySize,
 	}
 }
 
@@ -163,29 +149,54 @@ func (f *MinhashLSH[T]) Params() (k, l int) {
 	return f.k, f.l
 }
 
-func (f *MinhashLSH[T]) hashKeys(sig []uint64) []string {
-	hs := make([]string, f.l)
-	for i := 0; i < f.l; i++ {
-		hs[i] = f.hashKeyFunc(sig[i*f.k : (i+1)*f.k])
+// fillHashKeys fills keyBuf with all l band hash keys from sig.
+func (f *MinhashLSH[T]) fillHashKeys(sig []uint64) {
+	switch f.hashValueSize {
+	case 2:
+		for i := 0; i < f.l; i++ {
+			band := sig[i*f.k : (i+1)*f.k]
+			offset := i * f.keySize
+			for j, v := range band {
+				binary.LittleEndian.PutUint16(f.keyBuf[offset+j*2:], uint16(v))
+			}
+		}
+	case 4:
+		for i := 0; i < f.l; i++ {
+			band := sig[i*f.k : (i+1)*f.k]
+			offset := i * f.keySize
+			for j, v := range band {
+				binary.LittleEndian.PutUint32(f.keyBuf[offset+j*4:], uint32(v))
+			}
+		}
+	case 8:
+		for i := 0; i < f.l; i++ {
+			band := sig[i*f.k : (i+1)*f.k]
+			offset := i * f.keySize
+			for j, v := range band {
+				binary.LittleEndian.PutUint64(f.keyBuf[offset+j*8:], v)
+			}
+		}
 	}
-	return hs
 }
 
 // Add a key with MinHash signature into the index.
 // The key won't be searchable until Index() is called.
 func (f *MinhashLSH[T]) Add(key T, sig []uint64) {
-	// Generate hash keys
-	hs := f.hashKeys(sig)
-	// Insert keys into the hash tables by appending.
-	for i := range f.hashTables {
-		f.hashTables[i] = append(f.hashTables[i], entry[T]{hs[i], key})
+	f.fillHashKeys(sig)
+	// Single string allocation; substrings share the backing data.
+	allKeys := string(f.keyBuf)
+	for i := 0; i < f.l; i++ {
+		hk := allKeys[i*f.keySize : (i+1)*f.keySize]
+		f.hashTables[i] = append(f.hashTables[i], entry[T]{hk, key})
 	}
 }
 
 // Index makes all the keys added searchable.
 func (f *MinhashLSH[T]) Index() {
 	for i := range f.hashTables {
-		sort.Sort(f.hashTables[i])
+		slices.SortFunc(f.hashTables[i], func(a, b entry[T]) int {
+			return cmp.Compare(a.hashKey, b.hashKey)
+		})
 	}
 	f.numIndexedKeys = len(f.hashTables[0])
 }
@@ -200,24 +211,20 @@ func (f *MinhashLSH[T]) Query(sig []uint64) []T {
 	return results
 }
 
-func (f *MinhashLSH[T]) query(sig []uint64) map[T]bool {
-	// Generate hash keys.
-	hashKeys := f.hashKeys(sig)
-	results := make(map[T]bool)
-	// Query hash tables using binary search.
+func (f *MinhashLSH[T]) query(sig []uint64) map[T]struct{} {
+	f.fillHashKeys(sig)
+	// Single string allocation for all query keys.
+	allKeys := string(f.keyBuf)
+	results := make(map[T]struct{})
 	for i := 0; i < f.l; i++ {
-		// Only search over the indexed keys.
 		hashTable := f.hashTables[i][:f.numIndexedKeys]
-		hashKey := hashKeys[i]
-		k := sort.Search(len(hashTable), func(x int) bool {
-			return hashTable[x].hashKey >= hashKey
+		hashKey := allKeys[i*f.keySize : (i+1)*f.keySize]
+		k, found := slices.BinarySearchFunc(hashTable, hashKey, func(e entry[T], target string) int {
+			return cmp.Compare(e.hashKey, target)
 		})
-		if k < len(hashTable) && hashTable[k].hashKey == hashKey {
+		if found {
 			for j := k; j < len(hashTable) && hashTable[j].hashKey == hashKey; j++ {
-				key := hashTable[j].key
-				if _, exist := results[key]; !exist {
-					results[key] = true
-				}
+				results[hashTable[j].key] = struct{}{}
 			}
 		}
 	}

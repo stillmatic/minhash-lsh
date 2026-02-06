@@ -45,7 +45,7 @@ func main() {
 
 	// Indexing
 	start = time.Now()
-	lsh := minhashlsh.NewMinhashLSH(minhashSize, threshold, len(sets))
+	lsh := minhashlsh.NewMinhashLSH[string](minhashSize, threshold, len(setSigs))
 	for _, s := range setSigs {
 		lsh.Add(s.ID, s.signature)
 	}
@@ -63,7 +63,7 @@ func main() {
 				if !outputSelfPair && candidateID == s.ID {
 					continue
 				}
-				pairs <- pair{s.ID, candidateID.(string)}
+				pairs <- pair{s.ID, candidateID}
 			}
 		}
 	}()
