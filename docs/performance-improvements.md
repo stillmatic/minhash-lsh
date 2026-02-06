@@ -5,7 +5,7 @@ the bugs that were fixed along the way, and benchmark results.
 
 ## Bugs Fixed
 
-### 1. `MinhashLSHHeap` query was incorrect
+### 1. `MinhashLSHMap` query was incorrect
 
 The heap variant used `sort.Search` (binary search) on data that was never
 sorted. The `Add` method called the receiver's `Push`, which just appended to
@@ -155,7 +155,7 @@ Each query allocated a fresh `map[T]struct{}` for deduplication. Go 1.21's
 repeated queries reuse the same memory.
 
 **Fix:** Added a `results map[T]struct{}` field to both `MinhashLSH` and
-`MinhashLSHHeap`. Queries call `clear(f.results)` instead of `make()`.
+`MinhashLSHMap`. Queries call `clear(f.results)` instead of `make()`.
 The map is lazily initialized on first match, so queries that return
 no results never allocate the map at all.
 

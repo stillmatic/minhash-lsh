@@ -82,8 +82,8 @@ func Test_MinhashLSH2(t *testing.T) {
 	}
 }
 
-func Test_MinhashLSHHeap(t *testing.T) {
-	f := NewMinhashLSHHeap[string](256, 0.6)
+func Test_MinhashLSHMap(t *testing.T) {
+	f := NewMinhashLSHMap[string](256, 0.6)
 	// sig1 is different from sig2 and sig3
 	// sig2 and sig3 are identical
 	sig1 := randomSignature(256, 1)
@@ -97,12 +97,6 @@ func Test_MinhashLSHHeap(t *testing.T) {
 	// no need to call index
 	if len(f.Query(sig3)) != 2 {
 		t.Fatal("keys should be searchable before calling Index()")
-	}
-
-	for i := range f.hashTables {
-		if len(f.hashTables[i]) != 3 {
-			t.Fatal(f.hashTables[i])
-		}
 	}
 
 	found := 0
@@ -118,8 +112,8 @@ func Test_MinhashLSHHeap(t *testing.T) {
 	_ = sig1 // sig1 used in Add above
 }
 
-func Test_MinhashLSHHeapWithSize(t *testing.T) {
-	f := NewMinhashLSHHeapWithSize[string](256, 0.6, 3)
+func Test_MinhashLSHMapWithSize(t *testing.T) {
+	f := NewMinhashLSHMapWithSize[string](256, 0.6, 3)
 	// sig1 is different from sig2 and sig3
 	// sig2 and sig3 are identical
 	sig1 := randomSignature(256, 1)
@@ -133,12 +127,6 @@ func Test_MinhashLSHHeapWithSize(t *testing.T) {
 	// no need to call index
 	if len(f.Query(sig3)) != 2 {
 		t.Fatal("keys should be searchable before calling Index()")
-	}
-
-	for i := range f.hashTables {
-		if len(f.hashTables[i]) != 3 {
-			t.Fatal(f.hashTables[i])
-		}
 	}
 
 	found := 0
