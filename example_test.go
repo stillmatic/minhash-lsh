@@ -10,7 +10,7 @@ type newsItem struct {
 	Description string
 }
 
-func ExampleMinhashLSHHeap() {
+func ExampleMinhashLSHMap() {
 	newsItems := []newsItem{
 		{URL: "https://example.com/1", Description: "This is a test"},
 		{URL: "https://example.com/2", Description: "This is another test"},
@@ -18,14 +18,14 @@ func ExampleMinhashLSHHeap() {
 	}
 
 	// key on the URL, so instantiate with `string` generic
-	lsh := minhashlsh.NewMinhashLSHHeapWithSize[string](88, 0.7, len(newsItems))
+	lsh := minhashlsh.NewMinhashLSHMapWithSize[string](88, 0.7, len(newsItems))
 	for _, item := range newsItems {
 		mh := minhashlsh.NewMinhashWithDefaults()
 		mh.Push([]byte(item.Description))
 		lsh.Add(item.URL, mh.Signature())
 	}
 
-	// no need to build index with heap backend
+	// no need to build index with map backend
 
 	// find duplicate entries
 	dupeKeys := make(map[string]struct{})
