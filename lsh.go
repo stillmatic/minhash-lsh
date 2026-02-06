@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"math"
 	"slices"
+	"unsafe"
 )
 
 const (
@@ -92,8 +93,9 @@ type MinhashLSH[T comparable] struct {
 	hashTables     []hashTable[T]
 	hashValueSize  int
 	numIndexedKeys int
-	keyBuf  []byte // reusable buffer for batch hash key computation
-	keySize int    // hashValueSize * k (bytes per band key)
+	keyBuf  []byte          // reusable buffer for batch hash key computation
+	keySize int             // hashValueSize * k (bytes per band key)
+	results map[T]struct{}  // reusable between queries (cleared, not reallocated)
 }
 
 func newMinhashLSH[T comparable](threshold float64, numHash, hashValueSize, initSize int) *MinhashLSH[T] {
@@ -204,6 +206,9 @@ func (f *MinhashLSH[T]) Index() {
 // Query returns candidate keys given the query signature.
 func (f *MinhashLSH[T]) Query(sig []uint64) []T {
 	set := f.query(sig)
+	if len(set) == 0 {
+		return nil
+	}
 	results := make([]T, 0, len(set))
 	for key := range set {
 		results = append(results, key)
@@ -213,9 +218,11 @@ func (f *MinhashLSH[T]) Query(sig []uint64) []T {
 
 func (f *MinhashLSH[T]) query(sig []uint64) map[T]struct{} {
 	f.fillHashKeys(sig)
-	// Single string allocation for all query keys.
-	allKeys := string(f.keyBuf)
-	results := make(map[T]struct{})
+	// Zero-copy string view of keyBuf — safe because allKeys is only used
+	// for comparison within this function and keyBuf is not modified.
+	allKeys := unsafe.String(unsafe.SliceData(f.keyBuf), len(f.keyBuf))
+	// Reuse map between queries; clear() keeps allocated buckets.
+	clear(f.results)
 	for i := 0; i < f.l; i++ {
 		hashTable := f.hashTables[i][:f.numIndexedKeys]
 		hashKey := allKeys[i*f.keySize : (i+1)*f.keySize]
@@ -223,10 +230,13 @@ func (f *MinhashLSH[T]) query(sig []uint64) map[T]struct{} {
 			return cmp.Compare(e.hashKey, target)
 		})
 		if found {
+			if f.results == nil {
+				f.results = make(map[T]struct{})
+			}
 			for j := k; j < len(hashTable) && hashTable[j].hashKey == hashKey; j++ {
-				results[hashTable[j].key] = struct{}{}
+				f.results[hashTable[j].key] = struct{}{}
 			}
 		}
 	}
-	return results
+	return f.results
 }

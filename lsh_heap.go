@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/binary"
 	"slices"
+	"unsafe"
 )
 
 // MinhashLSHHeap represents a Minhash LSH that does not require an explicit
@@ -17,6 +18,7 @@ type MinhashLSHHeap[T comparable] struct {
 	sorted        bool
 	keyBuf        []byte
 	keySize       int
+	results       map[T]struct{} // reusable between queries
 }
 
 func NewMinhashLSHHeap[T comparable](numHash int, threshold float64) *MinhashLSHHeap[T] {
@@ -91,6 +93,9 @@ func (f *MinhashLSHHeap[T]) ensureSorted() {
 // Query returns candidate keys given the query signature.
 func (f *MinhashLSHHeap[T]) Query(sig []uint64) []T {
 	set := f.query(sig)
+	if len(set) == 0 {
+		return nil
+	}
 	results := make([]T, 0, len(set))
 	for key := range set {
 		results = append(results, key)
@@ -101,9 +106,10 @@ func (f *MinhashLSHHeap[T]) Query(sig []uint64) []T {
 func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]struct{} {
 	f.ensureSorted()
 	f.fillHashKeys(sig)
-	allKeys := string(f.keyBuf)
+	// Zero-copy string view — safe because only used for comparison here.
+	allKeys := unsafe.String(unsafe.SliceData(f.keyBuf), len(f.keyBuf))
 	n := len(f.hashTables[0])
-	results := make(map[T]struct{})
+	clear(f.results)
 	for i := 0; i < f.l; i++ {
 		hashTable := f.hashTables[i][:n]
 		hashKey := allKeys[i*f.keySize : (i+1)*f.keySize]
@@ -111,10 +117,13 @@ func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]struct{} {
 			return cmp.Compare(e.hashKey, target)
 		})
 		if found {
+			if f.results == nil {
+				f.results = make(map[T]struct{})
+			}
 			for j := k; j < len(hashTable) && hashTable[j].hashKey == hashKey; j++ {
-				results[hashTable[j].key] = struct{}{}
+				f.results[hashTable[j].key] = struct{}{}
 			}
 		}
 	}
-	return results
+	return f.results
 }

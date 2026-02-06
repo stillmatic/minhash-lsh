@@ -128,3 +128,69 @@ Note: the old heap-query numbers should be taken with a grain of salt since
 the old heap variant's binary search on unsorted data was incorrect — it
 happened to return plausible results on this benchmark but would miss matches
 in general.
+
+---
+
+## Round 2: Zero-allocation queries
+
+### Additional optimizations (on top of round 1)
+
+#### 5. `unsafe.String` for query path
+
+In the query path, `allKeys := string(f.keyBuf)` copied the entire key buffer
+into a new string — one allocation per query. But the string is only used for
+comparison within the `query()` function and doesn't escape; `keyBuf` isn't
+modified during the call.
+
+**Fix:** Replaced with `unsafe.String(unsafe.SliceData(f.keyBuf), len(f.keyBuf))`,
+which creates a string header pointing directly at `keyBuf` with no copy.
+
+The `Add` path still uses `string(f.keyBuf)` because stored strings must
+outlive the buffer.
+
+#### 6. Reusable results map with `clear()`
+
+Each query allocated a fresh `map[T]struct{}` for deduplication. Go 1.21's
+`clear()` builtin zeroes a map while keeping its allocated buckets, so
+repeated queries reuse the same memory.
+
+**Fix:** Added a `results map[T]struct{}` field to both `MinhashLSH` and
+`MinhashLSHHeap`. Queries call `clear(f.results)` instead of `make()`.
+The map is lazily initialized on first match, so queries that return
+no results never allocate the map at all.
+
+#### 7. Nil early return from `Query()`
+
+`Query()` now returns nil when the internal `query()` finds no candidates,
+skipping the `make([]T, 0, ...)` slice allocation.
+
+### Round 2 benchmark results
+
+Measured against round 1 code. Same hardware (Ryzen 9 7950X), Go 1.22,
+`go test -benchmem -count=3`, best of 3 runs.
+
+Insert is unchanged (same code path, same allocations).
+
+#### Query (best of 3 runs)
+
+| Benchmark | Round 1 ns/op | Round 2 ns/op | Speedup | Round 1 B/op | Round 2 B/op | Round 1 allocs | Round 2 allocs |
+|-----------|--------------|--------------|---------|-------------|-------------|---------------|---------------|
+| query-1k | 654 | 556 | 1.18x | 160 | 0 | 2 | **0** |
+| query-10k | 804 | 697 | 1.15x | 160 | 0 | 2 | **0** |
+| query-100k | 1,001 | 862 | 1.16x | 160 | 0 | 2 | **0** |
+| heap-query-1k | 688 | 562 | 1.22x | 272 | 0 | 2 | **0** |
+| heap-query-10k | 822 | 706 | 1.16x | 272 | 0 | 2 | **0** |
+| heap-query-100k | 1,007 | 905 | 1.11x | 272 | 0 | 2 | **0** |
+
+Queries are now **fully zero-allocation** — 0 B/op, 0 allocs/op.
+
+### Cumulative improvement (original → round 2)
+
+| Benchmark | Original ns/op | Final ns/op | Total speedup | Original allocs | Final allocs |
+|-----------|---------------|------------|---------------|----------------|-------------|
+| query-1k | 1,048 | 556 | **1.88x** | 30 | **0** |
+| query-10k | 1,182 | 697 | **1.70x** | 30 | **0** |
+| query-100k | 1,375 | 862 | **1.60x** | 30 | **0** |
+| insert-1k | 2,666,256 | 2,269,246 | **1.18x** | 15,931 | 1,917 (**8.3x fewer**) |
+| insert-10k | 20,113,921 | 16,427,248 | **1.22x** | 159,931 | 19,917 (**8.0x fewer**) |
+| insert-100k | 301,233,981 | 249,828,536 | **1.21x** | 1,599,931 | 199,917 (**8.0x fewer**) |
