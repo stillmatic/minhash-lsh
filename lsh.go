@@ -14,26 +14,36 @@ const (
 
 type hashKeyFunc func([]uint64) string
 
+func fillHashKeyBytes(dst []byte, sig []uint64, hashValueSize int) {
+	switch hashValueSize {
+	case 8:
+		for i, v := range sig {
+			binary.LittleEndian.PutUint64(dst[i*8:], v)
+		}
+	case 4:
+		for i, v := range sig {
+			binary.LittleEndian.PutUint32(dst[i*4:], uint32(v))
+		}
+	case 2:
+		for i, v := range sig {
+			binary.LittleEndian.PutUint16(dst[i*2:], uint16(v))
+		}
+	default:
+		panic("unsupported hash value size")
+	}
+}
+
 func hashKeyFuncGen(hashValueSize int) hashKeyFunc {
 	return func(sig []uint64) string {
 		s := make([]byte, hashValueSize*len(sig))
-		switch hashValueSize {
-		case 8:
-			for i, v := range sig {
-				binary.LittleEndian.PutUint64(s[i*8:], v)
-			}
-		case 4:
-			for i, v := range sig {
-				binary.LittleEndian.PutUint32(s[i*4:], uint32(v))
-			}
-		case 2:
-			for i, v := range sig {
-				binary.LittleEndian.PutUint16(s[i*2:], uint16(v))
-			}
-		default:
-			panic("unsupported hash value size")
-		}
+		fillHashKeyBytes(s, sig, hashValueSize)
 		return string(s)
+	}
+}
+
+func fillBandedHashKeys(dst []byte, sig []uint64, hashValueSize, keySize, k, l int) {
+	for i := 0; i < l; i++ {
+		fillHashKeyBytes(dst[i*keySize:(i+1)*keySize], sig[i*k:(i+1)*k], hashValueSize)
 	}
 }
 
@@ -147,9 +157,9 @@ type MinhashLSH[T comparable] struct {
 	k              int
 	l              int
 	hashTables     []hashTable[T]
-	hashKeyFunc    hashKeyFunc
 	hashValueSize  int
-	hs             []string
+	keySize        int
+	tmpKeyBuf      []byte
 	numIndexedKeys int
 }
 
@@ -163,9 +173,9 @@ func newMinhashLSH[T comparable](threshold float64, numHash, hashValueSize, init
 		k:              k,
 		l:              l,
 		hashValueSize:  hashValueSize,
+		keySize:        hashValueSize * k,
+		tmpKeyBuf:      make([]byte, hashValueSize*k*l),
 		hashTables:     hashTables,
-		hashKeyFunc:    hashKeyFuncGen(hashValueSize),
-		hs:             make([]string, l),
 		numIndexedKeys: 0,
 	}
 }
@@ -205,22 +215,18 @@ func (f *MinhashLSH[T]) Params() (k, l int) {
 	return f.k, f.l
 }
 
-func (f *MinhashLSH[T]) hashKeys(sig []uint64) []string {
-	for i := 0; i < f.l; i++ {
-		f.hs[i] = f.hashKeyFunc(sig[i*f.k : (i+1)*f.k])
-	}
-	return f.hs
-}
-
 // Add a key with MinHash signature into the index.
 // The key won't be searchable until Index() is called.
 func (f *MinhashLSH[T]) Add(key T, sig []uint64) {
 	if len(sig) < f.k*f.l {
 		panic("signature length does not match LSH parameters")
 	}
+	fillBandedHashKeys(f.tmpKeyBuf, sig, f.hashValueSize, f.keySize, f.k, f.l)
+	allKeys := string(f.tmpKeyBuf)
 	// Insert keys into the hash tables by appending.
 	for i := range f.hashTables {
-		hashKey := f.hashKeyFunc(sig[i*f.k : (i+1)*f.k])
+		start := i * f.keySize
+		hashKey := allKeys[start : start+f.keySize]
 		f.hashTables[i] = append(f.hashTables[i], entry[T]{hashKey: hashKey, key: key})
 	}
 }
@@ -236,6 +242,9 @@ func (f *MinhashLSH[T]) Index() {
 // Query returns candidate keys given the query signature.
 func (f *MinhashLSH[T]) Query(sig []uint64) []T {
 	set := f.query(sig)
+	if len(set) == 0 {
+		return nil
+	}
 	results := make([]T, 0, len(set))
 	for key := range set {
 		results = append(results, key)
@@ -248,20 +257,24 @@ func (f *MinhashLSH[T]) query(sig []uint64) map[T]struct{} {
 		panic("signature length does not match LSH parameters")
 	}
 	if f.numIndexedKeys == 0 {
-		return map[T]struct{}{}
+		return nil
 	}
-	// Generate hash keys.
-	hashKeys := f.hashKeys(sig)
-	results := make(map[T]struct{})
+	fillBandedHashKeys(f.tmpKeyBuf, sig, f.hashValueSize, f.keySize, f.k, f.l)
+	allKeys := string(f.tmpKeyBuf)
+	var results map[T]struct{}
 	// Query hash tables using binary search.
 	for i := 0; i < f.l; i++ {
 		// Only search over the indexed keys.
 		hashTable := f.hashTables[i][:f.numIndexedKeys]
-		hashKey := hashKeys[i]
+		start := i * f.keySize
+		hashKey := allKeys[start : start+f.keySize]
 		k := sort.Search(len(hashTable), func(x int) bool {
 			return hashTable[x].hashKey >= hashKey
 		})
 		if k < len(hashTable) && hashTable[k].hashKey == hashKey {
+			if results == nil {
+				results = make(map[T]struct{}, 4)
+			}
 			for j := k; j < len(hashTable) && hashTable[j].hashKey == hashKey; j++ {
 				key := hashTable[j].key
 				results[key] = struct{}{}

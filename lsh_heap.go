@@ -1,7 +1,6 @@
 package minhashlsh
 
 import (
-	"encoding/binary"
 	"sort"
 )
 
@@ -16,48 +15,17 @@ func (h similarityHeap[T]) Len() int           { return len(h) }
 func (h similarityHeap[T]) Less(i, j int) bool { return h[i].Value < h[j].Value }
 func (h similarityHeap[T]) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
 
-// hashKeyFuncer stores the hash key function and the buffer for encoding hash values.
-// this allows us to reuse without creating new buffers.
-type hashKeyFuncer struct {
-	hashValueSize int
-	s             []byte
-}
-
-func newHashKeyFuncer(hashValueSize int, k int) *hashKeyFuncer {
-	s := make([]byte, hashValueSize*k)
-	return &hashKeyFuncer{hashValueSize: hashValueSize, s: s}
-}
-
-func (h *hashKeyFuncer) hashKeyFunc(sig []uint64) string {
-	switch h.hashValueSize {
-	case 8:
-		for i, v := range sig {
-			binary.LittleEndian.PutUint64(h.s[i*8:], v)
-		}
-	case 4:
-		for i, v := range sig {
-			binary.LittleEndian.PutUint32(h.s[i*4:], uint32(v))
-		}
-	case 2:
-		for i, v := range sig {
-			binary.LittleEndian.PutUint16(h.s[i*2:], uint16(v))
-		}
-	default:
-		panic("unsupported hash value size")
-	}
-	return string(h.s)
-}
-
 // MinhashLSHHeap represents a Minhash LSH object with heap implementation
 // It does not require knowing the size of the indexed keys in advance.
 // It also 2-3x faster at the cost of increased memory usage.
 type MinhashLSHHeap[T comparable] struct {
-	k           int
-	l           int
-	hashTables  []*similarityHeap[T]
-	tableDirty  []bool
-	hashKeyFunc hashKeyFunc
-	hs          []string
+	k             int
+	l             int
+	hashTables    []*similarityHeap[T]
+	tableDirty    []bool
+	hashValueSize int
+	keySize       int
+	tmpKeyBuf     []byte
 }
 
 func NewMinhashLSHHeap[T comparable](numHash int, threshold float64) *MinhashLSHHeap[T] {
@@ -67,14 +35,14 @@ func NewMinhashLSHHeap[T comparable](numHash int, threshold float64) *MinhashLSH
 		h := &similarityHeap[T]{}
 		hashTables[i] = h
 	}
-	funcer := newHashKeyFuncer(4, k)
 	return &MinhashLSHHeap[T]{
-		k:           k,
-		l:           l,
-		hashTables:  hashTables,
-		tableDirty:  make([]bool, l),
-		hashKeyFunc: funcer.hashKeyFunc,
-		hs:          make([]string, l),
+		k:             k,
+		l:             l,
+		hashTables:    hashTables,
+		tableDirty:    make([]bool, l),
+		hashValueSize: 4,
+		keySize:       4 * k,
+		tmpKeyBuf:     make([]byte, 4*k*l),
 	}
 }
 
@@ -85,14 +53,14 @@ func NewMinhashLSHHeapWithSize[T comparable](numHash int, threshold float64, ini
 		h := make(similarityHeap[T], 0, initSize)
 		hashTables[i] = &h
 	}
-	funcer := newHashKeyFuncer(4, k)
 	return &MinhashLSHHeap[T]{
-		k:           k,
-		l:           l,
-		hashKeyFunc: funcer.hashKeyFunc,
-		hashTables:  hashTables,
-		tableDirty:  make([]bool, l),
-		hs:          make([]string, l),
+		k:             k,
+		l:             l,
+		hashTables:    hashTables,
+		tableDirty:    make([]bool, l),
+		hashValueSize: 4,
+		keySize:       4 * k,
+		tmpKeyBuf:     make([]byte, 4*k*l),
 	}
 }
 
@@ -100,8 +68,11 @@ func (f *MinhashLSHHeap[T]) Add(key T, sig []uint64) {
 	if len(sig) < f.k*f.l {
 		panic("signature length does not match LSH parameters")
 	}
-	hashKeys := f.hashKeys(sig)
-	for i, hashKey := range hashKeys {
+	fillBandedHashKeys(f.tmpKeyBuf, sig, f.hashValueSize, f.keySize, f.k, f.l)
+	allKeys := string(f.tmpKeyBuf)
+	for i := 0; i < f.l; i++ {
+		start := i * f.keySize
+		hashKey := allKeys[start : start+f.keySize]
 		*f.hashTables[i] = append(*f.hashTables[i], nodeSimilarity[T]{Key: key, Value: hashKey})
 		f.tableDirty[i] = true
 	}
@@ -110,6 +81,9 @@ func (f *MinhashLSHHeap[T]) Add(key T, sig []uint64) {
 // Query returns candidate keys given the query signature.
 func (f *MinhashLSHHeap[T]) Query(sig []uint64) []T {
 	set := f.query(sig)
+	if len(set) == 0 {
+		return nil
+	}
 	results := make([]T, 0, len(set))
 	for key := range set {
 		results = append(results, key)
@@ -121,8 +95,9 @@ func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]struct{} {
 	if len(sig) < f.k*f.l {
 		panic("signature length does not match LSH parameters")
 	}
-	hashKeys := f.hashKeys(sig)
-	results := make(map[T]struct{})
+	fillBandedHashKeys(f.tmpKeyBuf, sig, f.hashValueSize, f.keySize, f.k, f.l)
+	allKeys := string(f.tmpKeyBuf)
+	var results map[T]struct{}
 	// Query hash tables using binary search.
 	for i := 0; i < f.l; i++ {
 		if f.tableDirty[i] {
@@ -130,11 +105,15 @@ func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]struct{} {
 			f.tableDirty[i] = false
 		}
 		hashTable := *f.hashTables[i]
-		hashKey := hashKeys[i]
+		start := i * f.keySize
+		hashKey := allKeys[start : start+f.keySize]
 		k := sort.Search(len(hashTable), func(x int) bool {
 			return hashTable[x].Value >= hashKey
 		})
 		if k < len(hashTable) && hashTable[k].Value == hashKey {
+			if results == nil {
+				results = make(map[T]struct{}, 4)
+			}
 			for j := k; j < len(hashTable) && hashTable[j].Value == hashKey; j++ {
 				key := hashTable[j].Key
 				results[key] = struct{}{}
@@ -142,11 +121,4 @@ func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]struct{} {
 		}
 	}
 	return results
-}
-
-func (f *MinhashLSHHeap[T]) hashKeys(sig []uint64) []string {
-	for i := 0; i < f.l; i++ {
-		f.hs[i] = f.hashKeyFunc(sig[i*f.k : (i+1)*f.k])
-	}
-	return f.hs
 }
