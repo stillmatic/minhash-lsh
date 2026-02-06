@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sort"
+	"sync"
 )
 
 const (
@@ -16,10 +17,21 @@ type hashKeyFunc func([]uint64) string
 func hashKeyFuncGen(hashValueSize int) hashKeyFunc {
 	return func(sig []uint64) string {
 		s := make([]byte, hashValueSize*len(sig))
-		buf := make([]byte, 8)
-		for i, v := range sig {
-			binary.LittleEndian.PutUint64(buf, v)
-			copy(s[i*hashValueSize:(i+1)*hashValueSize], buf[:hashValueSize])
+		switch hashValueSize {
+		case 8:
+			for i, v := range sig {
+				binary.LittleEndian.PutUint64(s[i*8:], v)
+			}
+		case 4:
+			for i, v := range sig {
+				binary.LittleEndian.PutUint32(s[i*4:], uint32(v))
+			}
+		case 2:
+			for i, v := range sig {
+				binary.LittleEndian.PutUint16(s[i*2:], uint16(v))
+			}
+		default:
+			panic("unsupported hash value size")
 		}
 		return string(s)
 	}
@@ -84,6 +96,34 @@ func optimalKL(numHash int, t float64) (optK, optL int, fp, fn float64) {
 	return
 }
 
+type optimalKLCacheKey struct {
+	numHash       int
+	thresholdBits uint64
+}
+
+type optimalKLCacheValue struct {
+	k  int
+	l  int
+	fp float64
+	fn float64
+}
+
+var cachedOptimalKL sync.Map
+
+func optimalKLCached(numHash int, t float64) (k, l int, fp, fn float64) {
+	cacheKey := optimalKLCacheKey{
+		numHash:       numHash,
+		thresholdBits: math.Float64bits(t),
+	}
+	if v, ok := cachedOptimalKL.Load(cacheKey); ok {
+		cached := v.(optimalKLCacheValue)
+		return cached.k, cached.l, cached.fp, cached.fn
+	}
+	k, l, fp, fn = optimalKL(numHash, t)
+	cachedOptimalKL.Store(cacheKey, optimalKLCacheValue{k: k, l: l, fp: fp, fn: fn})
+	return k, l, fp, fn
+}
+
 // entry contains the hash key (from minhash signature) and the indexed key
 type entry[T any] struct {
 	hashKey string
@@ -109,11 +149,12 @@ type MinhashLSH[T comparable] struct {
 	hashTables     []hashTable[T]
 	hashKeyFunc    hashKeyFunc
 	hashValueSize  int
+	hs             []string
 	numIndexedKeys int
 }
 
 func newMinhashLSH[T comparable](threshold float64, numHash, hashValueSize, initSize int) *MinhashLSH[T] {
-	k, l, _, _ := optimalKL(numHash, threshold)
+	k, l, _, _ := optimalKLCached(numHash, threshold)
 	hashTables := make([]hashTable[T], l)
 	for i := range hashTables {
 		hashTables[i] = make(hashTable[T], 0, initSize)
@@ -124,6 +165,7 @@ func newMinhashLSH[T comparable](threshold float64, numHash, hashValueSize, init
 		hashValueSize:  hashValueSize,
 		hashTables:     hashTables,
 		hashKeyFunc:    hashKeyFuncGen(hashValueSize),
+		hs:             make([]string, l),
 		numIndexedKeys: 0,
 	}
 }
@@ -164,21 +206,22 @@ func (f *MinhashLSH[T]) Params() (k, l int) {
 }
 
 func (f *MinhashLSH[T]) hashKeys(sig []uint64) []string {
-	hs := make([]string, f.l)
 	for i := 0; i < f.l; i++ {
-		hs[i] = f.hashKeyFunc(sig[i*f.k : (i+1)*f.k])
+		f.hs[i] = f.hashKeyFunc(sig[i*f.k : (i+1)*f.k])
 	}
-	return hs
+	return f.hs
 }
 
 // Add a key with MinHash signature into the index.
 // The key won't be searchable until Index() is called.
 func (f *MinhashLSH[T]) Add(key T, sig []uint64) {
-	// Generate hash keys
-	hs := f.hashKeys(sig)
+	if len(sig) < f.k*f.l {
+		panic("signature length does not match LSH parameters")
+	}
 	// Insert keys into the hash tables by appending.
 	for i := range f.hashTables {
-		f.hashTables[i] = append(f.hashTables[i], entry[T]{hs[i], key})
+		hashKey := f.hashKeyFunc(sig[i*f.k : (i+1)*f.k])
+		f.hashTables[i] = append(f.hashTables[i], entry[T]{hashKey: hashKey, key: key})
 	}
 }
 
@@ -200,10 +243,16 @@ func (f *MinhashLSH[T]) Query(sig []uint64) []T {
 	return results
 }
 
-func (f *MinhashLSH[T]) query(sig []uint64) map[T]bool {
+func (f *MinhashLSH[T]) query(sig []uint64) map[T]struct{} {
+	if len(sig) < f.k*f.l {
+		panic("signature length does not match LSH parameters")
+	}
+	if f.numIndexedKeys == 0 {
+		return map[T]struct{}{}
+	}
 	// Generate hash keys.
 	hashKeys := f.hashKeys(sig)
-	results := make(map[T]bool)
+	results := make(map[T]struct{})
 	// Query hash tables using binary search.
 	for i := 0; i < f.l; i++ {
 		// Only search over the indexed keys.
@@ -215,9 +264,7 @@ func (f *MinhashLSH[T]) query(sig []uint64) map[T]bool {
 		if k < len(hashTable) && hashTable[k].hashKey == hashKey {
 			for j := k; j < len(hashTable) && hashTable[j].hashKey == hashKey; j++ {
 				key := hashTable[j].key
-				if _, exist := results[key]; !exist {
-					results[key] = true
-				}
+				results[key] = struct{}{}
 			}
 		}
 	}

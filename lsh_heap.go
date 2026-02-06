@@ -1,7 +1,6 @@
 package minhashlsh
 
 import (
-	"container/heap"
 	"encoding/binary"
 	"sort"
 )
@@ -14,38 +13,37 @@ type nodeSimilarity[T comparable] struct {
 type similarityHeap[T comparable] []nodeSimilarity[T]
 
 func (h similarityHeap[T]) Len() int           { return len(h) }
-func (h similarityHeap[T]) Less(i, j int) bool { return h[i].Value > h[j].Value }
+func (h similarityHeap[T]) Less(i, j int) bool { return h[i].Value < h[j].Value }
 func (h similarityHeap[T]) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
-
-func (h *similarityHeap[T]) Push(x any) {
-	*h = append(*h, x.(nodeSimilarity[T]))
-}
-
-func (h *similarityHeap[T]) Pop() any {
-	old := *h
-	n := len(old)
-	x := old[n-1]
-	*h = old[0 : n-1]
-	return x
-}
 
 // hashKeyFuncer stores the hash key function and the buffer for encoding hash values.
 // this allows us to reuse without creating new buffers.
 type hashKeyFuncer struct {
-	s   []byte
-	buf []byte
+	hashValueSize int
+	s             []byte
 }
 
 func newHashKeyFuncer(hashValueSize int, k int) *hashKeyFuncer {
 	s := make([]byte, hashValueSize*k)
-	buf := make([]byte, 8)
-	return &hashKeyFuncer{s: s, buf: buf}
+	return &hashKeyFuncer{hashValueSize: hashValueSize, s: s}
 }
 
 func (h *hashKeyFuncer) hashKeyFunc(sig []uint64) string {
-	for i, v := range sig {
-		binary.LittleEndian.PutUint64(h.buf, v)
-		copy(h.s[i*4:(i+1)*4], h.buf[:4])
+	switch h.hashValueSize {
+	case 8:
+		for i, v := range sig {
+			binary.LittleEndian.PutUint64(h.s[i*8:], v)
+		}
+	case 4:
+		for i, v := range sig {
+			binary.LittleEndian.PutUint32(h.s[i*4:], uint32(v))
+		}
+	case 2:
+		for i, v := range sig {
+			binary.LittleEndian.PutUint16(h.s[i*2:], uint16(v))
+		}
+	default:
+		panic("unsupported hash value size")
 	}
 	return string(h.s)
 }
@@ -54,56 +52,58 @@ func (h *hashKeyFuncer) hashKeyFunc(sig []uint64) string {
 // It does not require knowing the size of the indexed keys in advance.
 // It also 2-3x faster at the cost of increased memory usage.
 type MinhashLSHHeap[T comparable] struct {
-	k             int
-	l             int
-	hashTables    []*similarityHeap[T]
-	hashKeyFunc   hashKeyFunc
-	hashValueSize int
-	hs            []string
+	k           int
+	l           int
+	hashTables  []*similarityHeap[T]
+	tableDirty  []bool
+	hashKeyFunc hashKeyFunc
+	hs          []string
 }
 
 func NewMinhashLSHHeap[T comparable](numHash int, threshold float64) *MinhashLSHHeap[T] {
-	k, l, _, _ := optimalKL(numHash, threshold)
+	k, l, _, _ := optimalKLCached(numHash, threshold)
 	hashTables := make([]*similarityHeap[T], l)
 	for i := range hashTables {
 		h := &similarityHeap[T]{}
-		heap.Init(h)
 		hashTables[i] = h
 	}
 	funcer := newHashKeyFuncer(4, k)
 	return &MinhashLSHHeap[T]{
-		k:             k,
-		l:             l,
-		hashValueSize: 4, // Using 32-bit hash values
-		hashTables:    hashTables,
-		hashKeyFunc:   funcer.hashKeyFunc,
-		hs:            make([]string, l),
+		k:           k,
+		l:           l,
+		hashTables:  hashTables,
+		tableDirty:  make([]bool, l),
+		hashKeyFunc: funcer.hashKeyFunc,
+		hs:          make([]string, l),
 	}
 }
 
 func NewMinhashLSHHeapWithSize[T comparable](numHash int, threshold float64, initSize int) *MinhashLSHHeap[T] {
-	k, l, _, _ := optimalKL(numHash, threshold)
+	k, l, _, _ := optimalKLCached(numHash, threshold)
 	hashTables := make([]*similarityHeap[T], l)
 	for i := range hashTables {
 		h := make(similarityHeap[T], 0, initSize)
-		heap.Init(&h)
 		hashTables[i] = &h
 	}
 	funcer := newHashKeyFuncer(4, k)
 	return &MinhashLSHHeap[T]{
-		k:             k,
-		l:             l,
-		hashValueSize: 4, // Using 32-bit hash values
-		hashKeyFunc:   funcer.hashKeyFunc,
-		hashTables:    hashTables,
-		hs:            make([]string, l),
+		k:           k,
+		l:           l,
+		hashKeyFunc: funcer.hashKeyFunc,
+		hashTables:  hashTables,
+		tableDirty:  make([]bool, l),
+		hs:          make([]string, l),
 	}
 }
 
 func (f *MinhashLSHHeap[T]) Add(key T, sig []uint64) {
+	if len(sig) < f.k*f.l {
+		panic("signature length does not match LSH parameters")
+	}
 	hashKeys := f.hashKeys(sig)
 	for i, hashKey := range hashKeys {
-		f.hashTables[i].Push(nodeSimilarity[T]{Key: key, Value: hashKey})
+		*f.hashTables[i] = append(*f.hashTables[i], nodeSimilarity[T]{Key: key, Value: hashKey})
+		f.tableDirty[i] = true
 	}
 }
 
@@ -117,11 +117,18 @@ func (f *MinhashLSHHeap[T]) Query(sig []uint64) []T {
 	return results
 }
 
-func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]bool {
+func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]struct{} {
+	if len(sig) < f.k*f.l {
+		panic("signature length does not match LSH parameters")
+	}
 	hashKeys := f.hashKeys(sig)
-	results := make(map[T]bool)
+	results := make(map[T]struct{})
 	// Query hash tables using binary search.
 	for i := 0; i < f.l; i++ {
+		if f.tableDirty[i] {
+			sort.Sort(*f.hashTables[i])
+			f.tableDirty[i] = false
+		}
 		hashTable := *f.hashTables[i]
 		hashKey := hashKeys[i]
 		k := sort.Search(len(hashTable), func(x int) bool {
@@ -130,9 +137,7 @@ func (f *MinhashLSHHeap[T]) query(sig []uint64) map[T]bool {
 		if k < len(hashTable) && hashTable[k].Value == hashKey {
 			for j := k; j < len(hashTable) && hashTable[j].Value == hashKey; j++ {
 				key := hashTable[j].Key
-				if _, exist := results[key]; !exist {
-					results[key] = true
-				}
+				results[key] = struct{}{}
 			}
 		}
 	}

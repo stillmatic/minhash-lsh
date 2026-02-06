@@ -45,7 +45,7 @@ func main() {
 
 	// Indexing
 	start = time.Now()
-	lsh := minhashlsh.NewMinhashLSH(minhashSize, threshold, len(sets))
+	lsh := minhashlsh.NewMinhashLSH[string](minhashSize, threshold, len(sets))
 	for _, s := range setSigs {
 		lsh.Add(s.ID, s.signature)
 	}
@@ -63,7 +63,7 @@ func main() {
 				if !outputSelfPair && candidateID == s.ID {
 					continue
 				}
-				pairs <- pair{s.ID, candidateID.(string)}
+				pairs <- pair{s.ID, candidateID}
 			}
 		}
 	}()
@@ -109,15 +109,15 @@ type set struct {
 }
 
 // readSets takes a set file having the following format:
-// 1. One set per line
-// 2. Each set, all items are separated by whitespaces
-// 3. If the parameter firstItemIsID is set to true,
-//    the first itme is the unique ID of the set.
-// 4. The rest of the items with the following format:
-//    <value>____<frequency>
-//    * value is an unique element of the set
-//    * frequency is an integer count of the occurance of value
-//    * ____ (4 underscores) is the separator
+//  1. One set per line
+//  2. Each set, all items are separated by whitespaces
+//  3. If the parameter firstItemIsID is set to true,
+//     the first itme is the unique ID of the set.
+//  4. The rest of the items with the following format:
+//     <value>____<frequency>
+//     * value is an unique element of the set
+//     * frequency is an integer count of the occurance of value
+//     * ____ (4 underscores) is the separator
 func readSets(setFilename string, firstItemIsID bool) <-chan set {
 	sets := make(chan set)
 	go func() {

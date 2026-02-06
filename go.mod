@@ -1,6 +1,6 @@
 module github.com/stillmatic/minhash-lsh
 
-go 1.22.0
+go 1.22
 
 require github.com/dgryski/go-minhash v0.0.0-20190315135803-ad340ca03076
 
