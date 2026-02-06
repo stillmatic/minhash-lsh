@@ -11,6 +11,21 @@ Method:
 - Used best (lowest) `ns/op` from each side for each benchmark.
 - Command: `/usr/local/go/bin/go test -run '^$' -bench 'Benchmark_(InsertN|QueryN)$' -benchmem`
 
+What changed to improve performance:
+- Removed extra per-band scratch buffer allocation in hash key encoding and wrote directly to output byte slices (`lsh.go`, `lsh_heap.go`).
+- Cached `(k,l)` results for `optimalKL(numHash, threshold)` so constructor hot paths do not recompute expensive integrals each time.
+- Changed standard LSH `Add` to avoid building an intermediate `[]string` of band hashes on each insert; hashes are computed and appended per table directly.
+- Switched candidate sets from `map[T]bool` to `map[T]struct{}` in query paths to reduce map payload and allocations.
+- Added signature length guards to fail fast with clear panic messages instead of slice-bound panics in inner loops.
+- Reworked heap backend storage/query path:
+  - Append directly and mark table dirty on `Add`.
+  - Lazily sort once before query-time binary search when table is dirty.
+  - This fixes the prior unsorted-binary-search correctness issue while preserving fast insert behavior.
+
+Why query improved more in standard LSH than heap LSH:
+- Standard query dropped from 30 to 29 allocs/op due mostly to lighter query set representation and tighter hash-key handling.
+- Heap query alloc profile stayed flat (15 allocs/op), so gains are mostly from small constant-factor improvements.
+
 ### Insert (best of 3 runs)
 
 | Benchmark        | Before ns/op | After ns/op | Speedup | Before allocs | After allocs | Alloc reduction |
